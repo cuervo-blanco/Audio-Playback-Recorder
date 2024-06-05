@@ -1,9 +1,10 @@
 use dialoguer::{theme::ColorfulTheme, Select};
-use cpal::traits::{HostTrait, DeviceTrait};
+use cpal::traits::{HostTrait, DeviceTrait, StreamTrait};
 use cpal::*;
 use cpal::platform::Host;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use hound::{WavWriter, WavSpec};
 
 
 fn select_device(option: usize, host: &Host) -> String{
@@ -50,13 +51,11 @@ fn select_config(device: &Device) -> StreamConfig {
         .expect("Error querying configs");
 
     let mut sample_rates = Vec::new();
-    let mut sample_formats = Vec::new();
     let mut buffer_sizes = Vec::new();
 
     for config in supported_configs_range {
         sample_rates.push(config.min_sample_rate().0); //min sample rate
         sample_rates.push(config.max_sample_rate().0); //max sample rate
-        sample_formats.push(format!("{:?}", config.sample_format())); // sample format
         match config.buffer_size() {
             SupportedBufferSize::Range { min, max } => {
                 for size in (*min..=*max).step_by(256) {
@@ -79,13 +78,6 @@ fn select_config(device: &Device) -> StreamConfig {
         .with_prompt("Select Sample Rate")
         .default(0)
         .items(&sample_rates)
-        .interact()
-        .unwrap();
-
-    let _sample_format_selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select Sample Format")
-        .default(0)
-        .items(&sample_formats)
         .interact()
         .unwrap();
 
@@ -126,6 +118,26 @@ fn main_menu() -> usize {
 
 }
 
+fn save_to_wav(file_name: &str, specs: StreamConfig, samples: &[f32]) {
+    let spec = WavSpec {
+        channels: specs.channels,
+        sample_rate: specs.sample_rate.0,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+
+    let mut writer = WavWriter::create(file_name, spec).unwrap();
+
+    for &sample in samples.iter() {
+        let amplitude = i16::MAX as f32;
+        let sample = (sample * amplitude) as i16;
+        writer.write_sample(sample).unwrap();
+    }
+
+    writer.finalize().unwrap();
+
+}
+
 
 fn main() {
 
@@ -157,53 +169,60 @@ fn main() {
 
                 if let Some(ref device) = input_device {
 
-                let config: StreamConfig = select_config(&device.clone());
+                    let config: StreamConfig = select_config(&device.clone());
 
-                let audio_buffer = Arc::new(Mutex::new(Vec::new()));
+                    let audio_buffer = Arc::new(Mutex::new(Vec::new()));
 
-                let buffer_clone = Arc::clone(&audio_buffer);
-                let timeout: Duration = Duration::new(1, 0);
+                    let buffer_clone = Arc::clone(&audio_buffer);
+                    let timeout: Duration = Duration::from_secs(5);
 
-                let _stream = device.build_input_stream(
-                    &config,
-                    move |data: &[f32], _: &InputCallbackInfo| {
-                        let mut buffer = buffer_clone.lock().unwrap();
-                        buffer.extend_from_slice(data);
-                        },
-                    |err| eprintln!("An error occured on the input audio stream: {}", err),
-                        Some(timeout)
-                        ).unwrap();
+                    let stream = device.build_input_stream(
+                        &config,
+                        move |data: &[f32], _: &InputCallbackInfo| {
+                            let mut buffer = buffer_clone.lock().unwrap();
+                            buffer.extend_from_slice(data);
+                            },
+                        |err| eprintln!("An error occured on the input audio stream: {}", err),
+                            Some(timeout)
+                            ).unwrap();
+
+                    stream.play().unwrap();
+                    println!("Recording audio...");
+
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+
+                    println!("Press Q to stop recording");
+
+                    loop {
+                        let mut selection = String::new();
+                        std::io::stdin()
+                            .read_line(&mut selection)
+                            .expect("Failed to read line");
+                        let selection = selection.trim().to_uppercase();
+                        if selection == "Q" {
+                            stream.pause().unwrap();
+                            println!("Stopping recording...");
+                            std::thread::sleep(std::time::Duration::from_secs(1));
+                            println!("");
+                            break;
+                        } else {
+                            println!("Not a valid option");
+                        }
+                    }
+                    // Prompt user for name of file
+                    // Convert to wav
+                    let recording = audio_buffer.lock().unwrap();
+                    save_to_wav("output.wav", config, &recording);
+                    // Save to location in computer
+
                 }
-
             },
             _ => println!("Not available right now")
         }
 
-        if let Some(ref device) = input_device {
-            println!("Selected output device: {}", device.name().unwrap());
-        }
         if let Some(ref device) = output_device {
             println!("Selected output device: {}", device.name().unwrap());
         }
     }
-
-
-
-
-    // User Format Choice
-    // Setup Recording (Selected Interface, Sample Rate, Bit Depth, Channels)
-    // Start Recording
-    // Create buffer
-    // Use While loop to append incoming data to the buffer
-    // Get user input to start or stop recording
-    // Convert data to the format
-    // Write Buffer to File
-
-    // Playback:
-    // Setup playback engine
-    // Read file to buffer
-    // Start Playback (for data chunk in audio data write to hardware)
-    // Release Resources
-
 }
 
