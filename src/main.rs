@@ -5,7 +5,8 @@ use cpal::platform::Host;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use hound::{WavWriter, WavSpec};
-
+use rfd::FileDialog;
+use std::env;
 
 fn select_device(option: usize, host: &Host) -> String{
     let mut devices = Vec::new();
@@ -139,6 +140,33 @@ fn save_to_wav(file_name: &str, specs: StreamConfig, samples: &[f32]) {
 }
 
 
+fn select_location() -> String {
+    let file_path = FileDialog::new()
+        .set_title("Select a saving directory")
+        .set_directory("/")
+        .pick_folder();
+
+    let file_path = match file_path {
+        Some(path) => path,
+        None => env::current_dir().expect("Failed to get current directory")
+    };
+
+    println!("Enter file name: ");
+    let mut file_name = String::new();
+    std::io::stdin()
+        .read_line(&mut file_name)
+        .expect("Failed to read line");
+    let file_name = file_name.trim();
+
+    let full_path = format!("{}/{}.wav", file_path.display(), file_name);
+
+    full_path
+
+}
+
+
+
+
 fn main() {
 
     // Initialize Audio API
@@ -203,16 +231,16 @@ fn main() {
                             stream.pause().unwrap();
                             println!("Stopping recording...");
                             std::thread::sleep(std::time::Duration::from_secs(1));
-                            println!("");
                             break;
                         } else {
                             println!("Not a valid option");
                         }
                     }
                     // Prompt user for name of file
+                    let file_name = select_location();
                     // Convert to wav
                     let recording = audio_buffer.lock().unwrap();
-                    save_to_wav("output.wav", config, &recording);
+                    save_to_wav(&file_name, config, &recording);
                     // Save to location in computer
 
                 }
