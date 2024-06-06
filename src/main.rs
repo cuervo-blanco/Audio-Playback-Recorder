@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use hound::{WavWriter, WavSpec};
 use rfd::FileDialog;
+use std::path::{PathBuf, Path};
 use std::env;
 
 fn select_device(option: usize, host: &Host) -> String{
@@ -100,12 +101,14 @@ fn select_config(device: &Device) -> StreamConfig {
 
 }
 
+
 fn main_menu() -> usize {
     let selections = &[
         "Select Input Device",
         "Select Output Device",
         "Record Audio",
-        "Play Audio"
+        "Play Audio",
+        "Exit"
     ];
 
     let selection = Select::with_theme(&ColorfulTheme::default())
@@ -163,7 +166,22 @@ fn select_location() -> String {
     full_path
 
 }
+fn select_file() -> Option<PathBuf> {
 
+    let file = FileDialog::new()
+        .set_title("Select a file")
+        .pick_file();
+
+    match file {
+        Some(path) => {
+            return Some(path);
+        },
+        None => {
+            println!("No file selected");
+            None
+        }
+    }
+}
 
 
 
@@ -245,6 +263,77 @@ fn main() {
 
                 }
             },
+            3 => {
+                if let Some(ref device) = output_device {
+                    let config = device.default_output_config().unwrap();
+
+                    let config =  StreamConfig {
+                        channels: config.channels(),
+                        sample_rate: config.sample_rate(),
+                        buffer_size: BufferSize::Fixed(256),
+                    };
+
+                    let file_path = select_file();
+
+                    if let Some(path_buf) = file_path {
+                        let path: &Path = path_buf.as_path();
+                        let reader = hound::WavReader::open(path).unwrap();
+                        let spec = reader.spec();
+                        println!("Sample rate: {}", spec.sample_rate);
+                        println!("Number of channels: {}", spec.channels);
+
+                        let samples: Vec<f32> = reader.into_samples::<i16>()
+                            .map(|s| s.unwrap() as f32 / i16::MAX as f32)
+                            .collect();
+
+                        let audio_buffer = Arc::new(Mutex::new(samples));
+                        let mut sample_clock = 0usize;
+
+                        let stream = device.build_output_stream(
+                            &config,
+                            move |data: &mut [f32], _: &OutputCallbackInfo| {
+                                let buffer = audio_buffer.lock().unwrap();
+                                for frame in data.chunks_mut(config.channels as usize) {
+                                    let sample = buffer[sample_clock];
+                                    sample_clock = (sample_clock + 1) % buffer.len();
+                                    for sample_out in frame.iter_mut() {
+                                        *sample_out = sample;
+                                    }
+                                }
+                            },
+                            |err| eprintln!("An error occured on the output audio stream: {}", err),
+                            None
+                        ).unwrap();
+
+                        stream.play().unwrap();
+                        println!("Playing audio...");
+
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+
+                        println!("Press Q to stop playback");
+
+                        loop {
+                            let mut selection = String::new();
+                            std::io::stdin()
+                                .read_line(&mut selection)
+                                .expect("Failed to read line");
+                            let selection = selection.trim().to_uppercase();
+                            if selection == "Q" {
+                                stream.pause().unwrap();
+                                println!("Stopping playback...");
+                                std::thread::sleep(std::time::Duration::from_secs(1));
+                                break;
+                            } else {
+                                println!("Not a valid option");
+                            }
+                        }
+                    } else {
+                        println!("No path provided");
+                    }
+                }
+
+            },
+            4 => std::process::exit(0),
             _ => println!("Not available right now")
         }
 
